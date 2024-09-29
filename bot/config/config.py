@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     API_HASH: str
 
     USE_REF: bool = True
-    REF_ID: str = 'f355876562'
+    REF_ID: str = 'f810529190'
     GIVE_10_PERCENT_OF_REFERRALS_TO_CREATOR_OF_THE_SOFT: bool = False
 
     USE_RANDOM_DELAY_IN_RUN: bool = True

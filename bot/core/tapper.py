@@ -34,6 +34,7 @@ from bot.exceptions import InvalidSession
 
 self_tg_client = SelfTGClient()
 
+
 class Tapper:
     def __init__(self, tg_client: Client):
         self.session_name = tg_client.name
@@ -148,15 +149,7 @@ class Tapper:
                 except (Unauthorized, UserDeactivated, AuthKeyUnregistered):
                     raise InvalidSession(self.session_name)
 
-            if settings.USE_REF == True and settings.REF_ID:
-                ref_id = settings.REF_ID
-            else:
-                ref_id = 'f355876562'
-
-            if settings.GIVE_10_PERCENT_OF_REFERRALS_TO_CREATOR_OF_THE_SOFT:
-                self.start_param = random.choices([ref_id, 'f355876562', 'f464869246'], weights=[80, 5, 5])[0]
-            else:
-                self.start_param = ref_id
+            self.start_param = settings.REF_ID
 
             peer = await self.tg_client.resolve_peer('notpixel')
             InputBotApp = types.InputBotAppShortName(bot_id=peer, short_name="app")
@@ -215,7 +208,8 @@ class Tapper:
 
             return data
         except Exception as error:
-            self.error(f"{self.session_name} | Unknown error during get user info: <light-yellow>{error}</light-yellow>")
+            self.error(
+                f"{self.session_name} | Unknown error during get user info: <light-yellow>{error}</light-yellow>")
             return None
 
     async def get_balance(self, http_client: aiohttp.ClientSession):
@@ -270,7 +264,7 @@ class Tapper:
                     color = random.choice(settings.DRAW_RANDOM_COLORS)
 
                 payload = {
-                    "pixelId": int(f"{y}{x}")+1,
+                    "pixelId": int(f"{y}{x}") + 1,
                     "newColor": color
                 }
 
@@ -282,7 +276,8 @@ class Tapper:
 
                 draw_request.raise_for_status()
 
-                self.success(f"Painted (X: <cyan>{x}</cyan>, Y: <cyan>{y}</cyan>) with color <light-blue>{color}</light-blue> 🎨️")
+                self.success(
+                    f"Painted (X: <cyan>{x}</cyan>, Y: <cyan>{y}</cyan>) with color <light-blue>{color}</light-blue> 🎨️")
 
                 await asyncio.sleep(delay=random.randint(5, 10))
         except Exception as error:
@@ -303,7 +298,8 @@ class Tapper:
                 for name, level in sorted(boosts.items(), key=lambda item: item[1]):
                     if name not in settings.BOOSTS_BLACK_LIST:
                         try:
-                            res = await http_client.get(f'https://notpx.app/api/v1/mining/boost/check/{name}', ssl=settings.ENABLE_SSL)
+                            res = await http_client.get(f'https://notpx.app/api/v1/mining/boost/check/{name}',
+                                                        ssl=settings.ENABLE_SSL)
 
                             res.raise_for_status()
 
@@ -347,15 +343,18 @@ class Tapper:
                                 await asyncio.sleep(delay=random.randint(3, 5))
                                 self.success(f"Successfully joined to the <cyan>{name}</cyan> channel ✔️")
                             except Exception as error:
-                                self.error(f"Unknown error during joining to {name} channel: <light-yellow>{error}</light-yellow>")
+                                self.error(
+                                    f"Unknown error during joining to {name} channel: <light-yellow>{error}</light-yellow>")
                             finally:
                                 # Disconnect the client only if necessary, for instance, when the entire task is done
                                 if self.tg_client.is_connected:
                                     await self.tg_client.disconnect()
 
-                        response = await http_client.get(f'https://notpx.app/api/v1/mining/task/check/{social}?name={name}', ssl=settings.ENABLE_SSL)
+                        response = await http_client.get(
+                            f'https://notpx.app/api/v1/mining/task/check/{social}?name={name}', ssl=settings.ENABLE_SSL)
                     else:
-                        response = await http_client.get(f'https://notpx.app/api/v1/mining/task/check/{task}', ssl=settings.ENABLE_SSL)
+                        response = await http_client.get(f'https://notpx.app/api/v1/mining/task/check/{task}',
+                                                         ssl=settings.ENABLE_SSL)
 
                     response.raise_for_status()
 
@@ -371,7 +370,8 @@ class Tapper:
                         if current_balance is None:
                             self.info(f"Current balance: Unknown 🔳")
                         else:
-                            self.info(f"Current balance: <light-green>{'{:,.3f}'.format(current_balance)}</light-green> 🔳")
+                            self.info(
+                                f"Current balance: <light-green>{'{:,.3f}'.format(current_balance)}</light-green> 🔳")
                     else:
                         self.warning(f"Task requirements were not met <cyan>{task}</cyan>")
 
@@ -490,10 +490,11 @@ class Tapper:
 
                 self.info(f"sleep {sleep_time} minutes between cycles 💤")
 
-                await asyncio.sleep(delay=sleep_time*60)
+                await asyncio.sleep(delay=sleep_time * 60)
 
             except Exception as error:
                 self.error(f"Unknown error: <light-yellow>{error}</light-yellow>")
+
 
 async def run_tapper(tg_client: Client, proxy: str | None):
     try:
