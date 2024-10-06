@@ -3,6 +3,7 @@ from dateutil import parser
 from time import time
 from urllib.parse import unquote, quote
 import re
+from copy import deepcopy
 
 from json import dump as dp, loads as ld
 from aiocfscrape import CloudflareScraper
@@ -24,7 +25,7 @@ import aiohttp
 import json
 
 from .agents import generate_random_user_agent
-from .headers import headers
+from .headers import headers, headers_notcoin
 from .helper import format_duration
 
 from bot.config import settings
@@ -33,7 +34,6 @@ from bot.utils.logger import SelfTGClient
 from bot.exceptions import InvalidSession
 
 self_tg_client = SelfTGClient()
-
 
 class Tapper:
     def __init__(self, tg_client: Client):
@@ -48,10 +48,12 @@ class Tapper:
         self.peer = None
         self.first_run = None
         self.game_service_is_unavailable = False
+        self.already_joined_squad_channel = None
 
         self.session_ug_dict = self.load_user_agents() or []
 
         headers['User-Agent'] = self.check_user_agent()
+        headers_notcoin['User-Agent'] = headers['User-Agent']
 
     async def generate_random_user_agent(self):
         return generate_random_user_agent(device_type='android', browser_type='chrome')
@@ -149,7 +151,25 @@ class Tapper:
                 except (Unauthorized, UserDeactivated, AuthKeyUnregistered):
                     raise InvalidSession(self.session_name)
 
-            self.start_param = settings.REF_ID
+            if settings.USE_REF == True and settings.REF_ID:
+                ref_id = settings.REF_ID
+            else:
+                ref_id = 'f355876562'
+
+            if settings.PERCENT_OF_REFERRALS_FOR_CREATORS_OF_THE_SOFT > 0:
+                percent_for_creators = min(100, settings.PERCENT_OF_REFERRALS_FOR_CREATORS_OF_THE_SOFT)
+                percent_for_current = 100 - percent_for_creators
+
+                if percent_for_creators >= 20:
+                    percent_for_first_creator = percent_for_creators - 10
+                    percent_for_second_creator = 10
+                elif percent_for_creators >= 15:
+                    percent_for_first_creator = percent_for_creators - 5
+                    percent_for_second_creator = 5
+
+                self.start_param = random.choices([ref_id, 'f355876562', 'f464869246'], weights=[percent_for_current, percent_for_first_creator, 5])[0]
+            else:
+                self.start_param = ref_id
 
             peer = await self.tg_client.resolve_peer('notpixel')
             InputBotApp = types.InputBotAppShortName(bot_id=peer, short_name="app")
@@ -160,7 +180,7 @@ class Tapper:
                 platform='android',
                 write_allowed=True,
                 start_param=self.start_param
-            ), self)
+            ))
 
             auth_url = web_view.url
 
@@ -183,12 +203,97 @@ class Tapper:
             return tg_web_data
 
         except InvalidSession as error:
-            raise error
+            self.error(f"Session error during Authorization: <light-yellow>{error}</light-yellow>")
+            await asyncio.sleep(delay=10)
 
         except Exception as error:
             self.error(
                 f"Unknown error during Authorization: <light-yellow>{error}</light-yellow>")
             await asyncio.sleep(delay=3)
+
+    async def get_tg_web_data_not(self, proxy: str | None) -> str:
+        if proxy:
+            proxy = Proxy.from_str(proxy)
+            proxy_dict = dict(
+                scheme=proxy.protocol,
+                hostname=proxy.host,
+                port=proxy.port,
+                username=proxy.login,
+                password=proxy.password
+            )
+        else:
+            proxy_dict = None
+
+        self.tg_client.proxy = proxy_dict
+
+        try:
+            with_tg = True
+
+            if not self.tg_client.is_connected:
+                with_tg = False
+                try:
+                    await self.tg_client.connect()
+                except (Unauthorized, UserDeactivated, AuthKeyUnregistered):
+                    raise InvalidSession(self.session_name)
+
+            while True:
+                try:
+                    peer = await self.tg_client.resolve_peer('notgames_bot')
+                    break
+                except FloodWait as fl:
+                    fls = fl.value
+
+                    self.warning(f"FloodWait {fl}")
+                    self.info(f"Sleep {fls}s")
+
+                    await asyncio.sleep(fls + 3)
+
+            InputBotApp = types.InputBotAppShortName(bot_id=peer, short_name="squads")
+
+            web_view = await self.tg_client.invoke(RequestAppWebView(
+                peer=peer,
+                app=InputBotApp,
+                platform='android',
+                write_allowed=True,
+            ))
+
+            auth_url = web_view.url
+            tg_web_data = unquote(
+                string=auth_url.split('tgWebAppData=', maxsplit=1)[1].split('&tgWebAppVersion', maxsplit=1)[0])
+
+            if with_tg is False:
+                await self.tg_client.disconnect()
+
+            return tg_web_data
+
+        except InvalidSession as error:
+            raise error
+
+        except Exception as error:
+            self.error(f"Unknown error during getting web data for squads: <light-yellow>{error}</light-yellow>")
+            await asyncio.sleep(delay=3)
+
+    def is_night_time(self):
+        night_start = settings.NIGHT_TIME[0]
+        night_end = settings.NIGHT_TIME[1]
+
+        # Get the current hour
+        current_hour = datetime.now().hour
+
+        if current_hour >= night_start or current_hour < night_end:
+            return True
+
+        return False
+
+    def time_until_morning(self):
+        morning_time = datetime.now().replace(hour=6, minute=0, second=0, microsecond=0)
+
+        if datetime.now() >= morning_time:
+            morning_time += timedelta(days=1)
+
+        time_remaining = morning_time - datetime.now()
+
+        return time_remaining.total_seconds() / 60
 
     async def check_proxy(self, http_client: aiohttp.ClientSession, proxy: Proxy) -> None:
         try:
@@ -198,18 +303,29 @@ class Tapper:
         except Exception as error:
             self.error(f"Proxy: {proxy} | Error: {error}")
 
-    async def get_user_info(self, http_client: aiohttp.ClientSession):
-        try:
-            response = await http_client.get("https://notpx.app/api/v1/users/me", ssl=settings.ENABLE_SSL)
+    async def get_user_info(self, http_client: aiohttp.ClientSession, show_error_message: bool):
+        ssl = settings.ENABLE_SSL
+        err = None
 
-            response.raise_for_status()
+        for _ in range(2):
+            try:
+                response = await http_client.get("https://notpx.app/api/v1/users/me", ssl=ssl)
 
-            data = await response.json()
+                response.raise_for_status()
 
-            return data
-        except Exception as error:
-            self.error(
-                f"{self.session_name} | Unknown error during get user info: <light-yellow>{error}</light-yellow>")
+                data = await response.json()
+
+                err = None
+
+                return data
+            except Exception as error:
+                ssl = not ssl
+                self.info(f"First get user info request not always successful, retrying..")
+                err = error
+                continue
+
+        if err != None and show_error_message == True:
+            self.error(f"Unknown error during get user info: <light-yellow>{err}</light-yellow>")
             return None
 
     async def get_balance(self, http_client: aiohttp.ClientSession):
@@ -264,7 +380,7 @@ class Tapper:
                     color = random.choice(settings.DRAW_RANDOM_COLORS)
 
                 payload = {
-                    "pixelId": int(f"{y}{x}") + 1,
+                    "pixelId": int(f"{y}{x}")+1,
                     "newColor": color
                 }
 
@@ -276,8 +392,7 @@ class Tapper:
 
                 draw_request.raise_for_status()
 
-                self.success(
-                    f"Painted (X: <cyan>{x}</cyan>, Y: <cyan>{y}</cyan>) with color <light-blue>{color}</light-blue> 🎨️")
+                self.success(f"Painted (X: <cyan>{x}</cyan>, Y: <cyan>{y}</cyan>) with color <light-blue>{color}</light-blue> 🎨️")
 
                 await asyncio.sleep(delay=random.randint(5, 10))
         except Exception as error:
@@ -295,11 +410,24 @@ class Tapper:
 
                 boosts = data['boosts']
 
+                self.info(f"Boosts Levels: Energy Limit - <cyan>{boosts['energyLimit']}</cyan> ⚡️| Paint Reward - <light-green>{boosts['paintReward']}</light-green> 🔳 | Recharge Speed - <magenta>{boosts['reChargeSpeed']}</magenta> 🚀")
+
+                if boosts['energyLimit'] >= settings.ENERGY_LIMIT_MAX and boosts['paintReward'] >= settings.PAINT_REWARD_MAX and boosts['reChargeSpeed'] >= settings.RE_CHARGE_SPEED_MAX:
+                    return
+
                 for name, level in sorted(boosts.items(), key=lambda item: item[1]):
+                    if name == 'energyLimit' and level >= settings.ENERGY_LIMIT_MAX:
+                        continue
+
+                    if name == 'paintReward' and level >= settings.PAINT_REWARD_MAX:
+                        continue
+
+                    if name == 'reChargeSpeed' and level >= settings.RE_CHARGE_SPEED_MAX:
+                        continue
+
                     if name not in settings.BOOSTS_BLACK_LIST:
                         try:
-                            res = await http_client.get(f'https://notpx.app/api/v1/mining/boost/check/{name}',
-                                                        ssl=settings.ENABLE_SSL)
+                            res = await http_client.get(f'https://notpx.app/api/v1/mining/boost/check/{name}', ssl=settings.ENABLE_SSL)
 
                             res.raise_for_status()
 
@@ -320,6 +448,10 @@ class Tapper:
         try:
             res = await http_client.get('https://notpx.app/api/v1/mining/status', ssl=settings.ENABLE_SSL)
 
+            await asyncio.sleep(delay=random.randint(1, 3))
+
+            user = await self.get_user_info(http_client=http_client, show_error_message=False)
+
             res.raise_for_status()
 
             data = await res.json()
@@ -327,6 +459,9 @@ class Tapper:
             tasks = data['tasks'].keys()
 
             for task in settings.TASKS_TODO_LIST:
+                if user != None and task == 'premium' and not 'isPremium' in user:
+                    continue
+
                 if task not in tasks:
                     if re.search(':', task) is not None:
                         split_str = task.split(':')
@@ -343,18 +478,15 @@ class Tapper:
                                 await asyncio.sleep(delay=random.randint(3, 5))
                                 self.success(f"Successfully joined to the <cyan>{name}</cyan> channel ✔️")
                             except Exception as error:
-                                self.error(
-                                    f"Unknown error during joining to {name} channel: <light-yellow>{error}</light-yellow>")
+                                self.error(f"Unknown error during joining to {name} channel: <light-yellow>{error}</light-yellow>")
                             finally:
                                 # Disconnect the client only if necessary, for instance, when the entire task is done
                                 if self.tg_client.is_connected:
                                     await self.tg_client.disconnect()
 
-                        response = await http_client.get(
-                            f'https://notpx.app/api/v1/mining/task/check/{social}?name={name}', ssl=settings.ENABLE_SSL)
+                        response = await http_client.get(f'https://notpx.app/api/v1/mining/task/check/{social}?name={name}', ssl=settings.ENABLE_SSL)
                     else:
-                        response = await http_client.get(f'https://notpx.app/api/v1/mining/task/check/{task}',
-                                                         ssl=settings.ENABLE_SSL)
+                        response = await http_client.get(f'https://notpx.app/api/v1/mining/task/check/{task}', ssl=settings.ENABLE_SSL)
 
                     response.raise_for_status()
 
@@ -363,15 +495,14 @@ class Tapper:
                     status = data[task]
 
                     if status:
-                        self.success(f"Task requirements met. Task <cyan>{task}</cyan> completed")
+                        self.success(f"Task requirements met. Task <cyan>{task}</cyan> completed ✔")
 
                         current_balance = await self.get_balance(http_client=http_client)
 
                         if current_balance is None:
                             self.info(f"Current balance: Unknown 🔳")
                         else:
-                            self.info(
-                                f"Current balance: <light-green>{'{:,.3f}'.format(current_balance)}</light-green> 🔳")
+                            self.info(f"Balance: <light-green>{'{:,.3f}'.format(current_balance)}</light-green> 🔳")
                     else:
                         self.warning(f"Task requirements were not met <cyan>{task}</cyan>")
 
@@ -408,6 +539,79 @@ class Tapper:
 
             await asyncio.sleep(delay=3)
 
+    async def join_squad(self, http_client=aiohttp.ClientSession, user={}):
+        try:
+            current_squad_slug = user['squad']['slug']
+
+            if settings.ENABLE_AUTO_JOIN_TO_SQUAD_CHANNEL and settings.SQUAD_SLUG and current_squad_slug != settings.SQUAD_SLUG:
+                try:
+                    if self.already_joined_squad_channel != settings.SQUAD_SLUG:
+                        if not self.tg_client.is_connected:
+                            await self.tg_client.connect()
+                            await asyncio.sleep(delay=2)
+
+                        res = await self.tg_client.join_chat(settings.SQUAD_SLUG)
+
+                        if res:
+                            self.success(f"Successfully joined to squad channel: <magenta>{settings.SQUAD_SLUG}</magenta>")
+
+                        self.already_joined_squad_channel = settings.SQUAD_SLUG
+
+                        await asyncio.sleep(delay=2)
+
+                        if self.tg_client.is_connected:
+                            await self.tg_client.disconnect()
+
+                except Exception as error:
+                    self.error(f"Unknown error when joining squad channel <cyan>{settings.SQUAD_SLUG}</cyan>: <light-yellow>{error}</light-yellow>")
+
+                squad = settings.SQUAD_SLUG
+                local_headers = deepcopy(headers_notcoin)
+
+                local_headers['X-Auth-Token'] = "Bearer null"
+
+                response = await http_client.post(
+                   'https://api.notcoin.tg/auth/login',
+                    headers=local_headers,
+                    json={"webAppData": self.tg_web_data_not}
+                )
+
+                response.raise_for_status()
+
+                text_data = await response.text()
+
+                json_data = json.loads(text_data)
+
+                accessToken = json_data.get("data", {}).get("accessToken", None)
+
+                if not accessToken:
+                    self.warning(f"Error during join squads: can't get an authentication token to enter to the squad")
+                    return
+
+                local_headers['X-Auth-Token'] = f'Bearer {accessToken}'
+                info_response = await http_client.get(
+                    url=f'https://api.notcoin.tg/squads/by/slug/{squad}',
+                    headers=local_headers
+                )
+
+                info_json = await info_response.json()
+                chat_id = info_json['data']['squad']['chatId']
+
+                join_response = await http_client.post(
+                    f'https://api.notcoin.tg/squads/{squad}/join',
+                    headers=local_headers,
+                    json={'chatId': chat_id}
+                )
+
+                if join_response.status in [200, 201]:
+                    self.success(f"Successfully joined squad: <magenta>{squad}</magenta>")
+                else:
+                    self.warning(f"Something went wrong when joining squad: <magenta>{squad}</magenta>")
+        except Exception as error:
+            self.error(f"Unknown error when joining squad: <light-yellow>{error}</light-yellow>")
+
+            await asyncio.sleep(delay=3)
+
     async def run(self, proxy: str | None) -> None:
         if settings.USE_RANDOM_DELAY_IN_RUN:
             random_delay = random.randint(settings.RANDOM_DELAY_IN_RUN[0], settings.RANDOM_DELAY_IN_RUN[1])
@@ -437,9 +641,10 @@ class Tapper:
                     if "Authorization" in http_client.headers:
                         del http_client.headers["Authorization"]
 
-                    tg_web_data = await self.get_tg_web_data(proxy=proxy)
+                    self.tg_web_data = await self.get_tg_web_data(proxy=proxy)
+                    self.tg_web_data_not = await self.get_tg_web_data_not(proxy=proxy)
 
-                    http_client.headers['Authorization'] = f"initData {tg_web_data}"
+                    http_client.headers['Authorization'] = f"initData {self.tg_web_data}"
 
                     access_token_created_time = time()
                     token_live_time = random.randint(500, 900)
@@ -458,17 +663,22 @@ class Tapper:
                 break
 
             try:
-                user = await self.get_user_info(http_client=http_client)
+                user = await self.get_user_info(http_client=http_client, show_error_message=True)
 
                 await asyncio.sleep(delay=2)
 
                 if user is not None:
                     current_balance = await self.get_balance(http_client=http_client)
+                    repaints = user['repaints']
+                    league = user['league']
 
                     if current_balance is None:
                         self.info(f"Current balance: Unknown 🔳")
                     else:
-                        self.info(f"Current balance: <light-green>{'{:,.3f}'.format(current_balance)}</light-green> 🔳")
+                        self.info(f"Balance: <light-green>{'{:,.3f}'.format(current_balance)}</light-green> 🔳 | Repaints: <magenta>{repaints}</magenta> 🎨️ | League: <cyan>{league.capitalize()}</cyan> 🏆")
+
+                    if settings.ENABLE_AUTO_JOIN_TO_SQUAD:
+                        await self.join_squad(http_client=http_client, user=user)
 
                     if settings.ENABLE_AUTO_DRAW:
                         await self.draw(http_client=http_client)
@@ -490,11 +700,19 @@ class Tapper:
 
                 self.info(f"sleep {sleep_time} minutes between cycles 💤")
 
-                await asyncio.sleep(delay=sleep_time * 60)
+                is_night = False
+
+                if settings.DISABLE_IN_NIGHT:
+                    is_night = self.is_night_time()
+
+                if is_night:
+                    end_night_time = settings.NIGHT_TIME[1]
+                    sleep_time = self.time_until_morning()
+
+                await asyncio.sleep(delay=sleep_time*60)
 
             except Exception as error:
                 self.error(f"Unknown error: <light-yellow>{error}</light-yellow>")
-
 
 async def run_tapper(tg_client: Client, proxy: str | None):
     try:
