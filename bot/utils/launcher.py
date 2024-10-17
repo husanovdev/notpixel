@@ -28,7 +28,9 @@ My other bots:
 💩Boinkers - https://github.com/YarmolenkoD/boinkers
 🚀Moonbix - https://github.com/YarmolenkoD/moonbix [GAME IS NOT WORKING]
 
-NEW ENV VARIABLE: ENABLE_EXPERIMENTAL_X3_MODE=True (Default = True)
+NEW ENV VARIABLES:
+
+ENABLE_CHECK_UPDATED_IMAGE_MODE=False (Default = False)
 
 Select an action:
 
