@@ -23,7 +23,7 @@ class Settings(BaseSettings):
 
     ENABLE_AUTO_JOIN_TO_SQUAD_CHANNEL: bool = False
     ENABLE_AUTO_JOIN_TO_SQUAD: bool = True
-    SQUAD_SLUG: str = 'notpixel_raiders'
+    SQUAD_SLUG: str = 'airdrop_tg_uz'
 
     DISABLE_IN_NIGHT: bool = False
     NIGHT_TIME: list[int] = [23, 6]
